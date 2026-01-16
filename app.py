@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, render_template_string, request, send_file
 import requests
 from fake_useragent import UserAgent
 import uuid
@@ -10,17 +10,18 @@ import os
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from io import StringIO
+import json
+from datetime import datetime
 
-#Join : t.me/GatewayMaker
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-
 mass_check_results = {}
 mass_check_status = {}
-
+approved_cards_storage = []
 
 @app.route('/')
 def home():
@@ -356,6 +357,17 @@ def home():
                 background: rgba(255, 255, 255, 0.2);
             }
             
+            .btn-success {
+                background: var(--success);
+                color: white;
+            }
+            
+            .btn-success:hover {
+                background: #45a049;
+                transform: translateY(-3px);
+                box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+            }
+            
             .result-container {
                 margin-top: 20px;
                 padding: 20px;
@@ -508,6 +520,25 @@ def home():
                 background: var(--success);
             }
             
+            .download-section {
+                margin-top: 20px;
+                padding: 20px;
+                border-radius: 10px;
+                background: rgba(0, 0, 0, 0.2);
+                border: 1px solid var(--glass-border);
+            }
+            
+            .download-section h4 {
+                margin-bottom: 15px;
+            }
+            
+            .download-info {
+                margin-bottom: 15px;
+                padding: 10px;
+                background: rgba(255, 255, 255, 0.05);
+                border-radius: 5px;
+            }
+            
             footer {
                 text-align: center;
                 padding: 30px 0;
@@ -614,6 +645,9 @@ def home():
                         Check Cards
                     </button>
                     <button class="btn btn-secondary" onclick="clearMassResults()">Clear Results</button>
+                    <button class="btn btn-success" onclick="downloadApprovedCards()" id="download-btn" style="display:none;">
+                        <i class="fas fa-download"></i> Download Aprovados (.txt)
+                    </button>
                     
                     <div id="mass-progress" class="progress-bar" style="display:none;">
                         <div id="mass-progress-fill" class="progress-fill"></div>
@@ -642,6 +676,14 @@ def home():
                         <h4>Results:</h4>
                         <div id="mass-result-content"></div>
                     </div>
+                    
+                    <div id="download-section" class="download-section" style="display:none;">
+                        <h4>Download Approved Cards</h4>
+                        <div id="download-info" class="download-info">
+                            <p>Approved cards will be saved automatically. Click the button above to download.</p>
+                            <p id="approved-count">Approved Cards: 0</p>
+                        </div>
+                    </div>
                 </div>
             </div>
             
@@ -655,7 +697,7 @@ def home():
                         <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 5px; margin-top: 10px; font-family: monospace;">
                             /process?key=inferno&site=example.com&cc=card_number|mm|yy|cvv
                         </div>
-                        <button class="copy-btn" onclick="copyToClipboard('/process?key=dark&site=example.com&cc=card_number|mm|yy|cvv')">Copy</button>
+                        <button class="copy-btn" onclick="copyToClipboard('/process?key=inferno&site=example.com&cc=card_number|mm|yy|cvv')">Copy</button>
                     </div>
                     
                     <div class="result-item">
@@ -665,6 +707,15 @@ def home():
                             /bulk?key=inferno&cc=card_number|mm|yy|cvv
                         </div>
                         <button class="copy-btn" onclick="copyToClipboard('/bulk?key=inferno&cc=card_number|mm|yy|cvv')">Copy</button>
+                    </div>
+                    
+                    <div class="result-item">
+                        <h4>Download Approved Cards</h4>
+                        <p>Download all approved cards as a text file</p>
+                        <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 5px; margin-top: 10px; font-family: monospace;">
+                            /download/approved
+                        </div>
+                        <button class="copy-btn" onclick="copyToClipboard('/download/approved')">Copy</button>
                     </div>
                     
                     <div class="result-item">
@@ -799,6 +850,10 @@ def home():
                 document.getElementById('single-cc').value = '';
             }
             
+            // Global variables for mass check
+            let approvedCardsList = [];
+            let currentSite = '';
+            
             // Check mass cards
             function checkMassCards() {
                 const site = document.getElementById('mass-site').value.trim();
@@ -808,6 +863,10 @@ def home():
                 const progressBar = document.getElementById('mass-progress');
                 const progressFill = document.getElementById('mass-progress-fill');
                 const statsContainer = document.getElementById('mass-stats');
+                const downloadBtn = document.getElementById('download-btn');
+                const downloadSection = document.getElementById('download-section');
+                const downloadInfo = document.getElementById('download-info');
+                const approvedCount = document.getElementById('approved-count');
                 const loader = document.getElementById('mass-loader');
                 
                 if (!site || !ccText) {
@@ -827,6 +886,10 @@ def home():
                     showNotification('Maximum 200 cards allowed', 'error');
                     return;
                 }
+                
+                // Reset approved cards list
+                approvedCardsList = [];
+                currentSite = site;
                 
                 // Show loader and progress
                 loader.style.display = 'inline-block';
@@ -848,6 +911,10 @@ def home():
                 resultContent.innerHTML = '';
                 resultContainer.classList.add('show');
                 
+                // Hide download section initially
+                downloadSection.style.display = 'none';
+                downloadBtn.style.display = 'none';
+                
                 // Process cards
                 const results = [];
                 let completed = 0;
@@ -868,7 +935,8 @@ def home():
                         .then(response => response.json())
                         .then(data => {
                             // Update result item
-                            resultItem.className = `result-item ${data.Status === 'Approved' ? 'success' : 'error'}`;
+                            const isApproved = data.Status === 'Approved';
+                            resultItem.className = `result-item ${isApproved ? 'success' : 'error'}`;
                             resultItem.innerHTML = `
                                 <div class="card-number">Card: ${formatCardNumber(card.split('|')[0])}</div>
                                 <div class="card-response">Response: ${data.Response}</div>
@@ -876,8 +944,16 @@ def home():
                             `;
                             
                             // Update stats
-                            if (data.Status === 'Approved') {
+                            if (isApproved) {
                                 approved++;
+                                // Add to approved cards list
+                                approvedCardsList.push({
+                                    card: card,
+                                    response: data.Response,
+                                    status: data.Status,
+                                    domain: site,
+                                    timestamp: new Date().toLocaleString()
+                                });
                             } else {
                                 declined++;
                             }
@@ -894,6 +970,19 @@ def home():
                             // Check if all cards are processed
                             if (completed === total) {
                                 loader.style.display = 'none';
+                                
+                                // Show download section if there are approved cards
+                                if (approved > 0) {
+                                    downloadBtn.style.display = 'inline-block';
+                                    downloadSection.style.display = 'block';
+                                    approvedCount.textContent = `Approved Cards: ${approved}`;
+                                    downloadInfo.innerHTML = `
+                                        <p>${approved} card(s) approved successfully!</p>
+                                        <p>Click the download button to save all approved cards.</p>
+                                        <p>File format: cards_approved_[timestamp].txt</p>
+                                    `;
+                                }
+                                
                                 showNotification(`Mass check completed! Approved: ${approved}, Declined: ${declined}`, 'info');
                             }
                         })
@@ -933,11 +1022,54 @@ def home():
                 document.getElementById('mass-cc').value = '';
                 document.getElementById('mass-progress').style.display = 'none';
                 document.getElementById('mass-stats').style.display = 'none';
+                document.getElementById('download-section').style.display = 'none';
+                document.getElementById('download-btn').style.display = 'none';
+                approvedCardsList = [];
+                currentSite = '';
+            }
+            
+            // Download approved cards
+            function downloadApprovedCards() {
+                if (approvedCardsList.length === 0) {
+                    showNotification('No approved cards to download', 'error');
+                    return;
+                }
+                
+                // Create a blob with the approved cards data
+                let fileContent = `AutoStripe API - Approved Cards\n`;
+                fileContent += `Generated on: ${new Date().toLocaleString()}\n`;
+                fileContent += `Site: ${currentSite}\n`;
+                fileContent += `Total Approved: ${approvedCardsList.length}\n`;
+                fileContent += `========================================\n\n`;
+                
+                approvedCardsList.forEach((card, index) => {
+                    fileContent += `[${index + 1}] ${card.card}\n`;
+                    fileContent += `Status: ${card.status}\n`;
+                    fileContent += `Response: ${card.response}\n`;
+                    fileContent += `Domain: ${card.domain}\n`;
+                    fileContent += `Time: ${card.timestamp}\n`;
+                    fileContent += `----------------------------------------\n`;
+                });
+                
+                // Create a blob and download link
+                const blob = new Blob([fileContent], { type: 'text/plain' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                a.href = url;
+                a.download = `cards_approved_${timestamp}.txt`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                
+                showNotification(`Downloaded ${approvedCardsList.length} approved cards`, 'success');
             }
         </script>
     </body>
     </html>
     """)
+
 #Main Function Niggas Do Not Copy It
 def get_stripe_key(domain):
     logger.debug(f"Getting Stripe key for domain: {domain}")
@@ -1207,6 +1339,15 @@ def process_card_enhanced(domain, ccx, use_registration=True):
                         return {"Response": "3D", "Status": "Declined"}
                     elif data_status == 'succeeded':
                         logger.debug("Payment succeeded")
+                        # Store approved card
+                        approved_card = {
+                            'card': ccx,
+                            'domain': domain,
+                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'response': 'Card Added',
+                            'status': 'Approved'
+                        }
+                        approved_cards_storage.append(approved_card)
                         return {"Response": "Card Added ", "Status": "Approved"}
                     elif 'error' in setup_data['data']:
                         error_msg = setup_data['data']['error'].get('message', 'Unknown error')
@@ -1220,6 +1361,15 @@ def process_card_enhanced(domain, ccx, use_registration=True):
 
                 if setup_data.get('status') in ['succeeded', 'success']:
                     logger.debug("Payment succeeded")
+                    # Store approved card
+                    approved_card = {
+                        'card': ccx,
+                        'domain': domain,
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'response': 'Card Added',
+                        'status': 'Approved'
+                    }
+                    approved_cards_storage.append(approved_card)
                     return {"Response": "Card Added", "Status": "Approved"}
 
             except Exception as e:
@@ -1316,11 +1466,47 @@ def bulk_process_request():
         logger.error(f"Bulk request error: {e}")
         return jsonify({"error": f"Internal server error: {str(e)}", "status": "Error"}), 500
 
+@app.route('/download/approved')
+def download_approved_cards():
+    try:
+        if not approved_cards_storage:
+            return jsonify({"error": "No approved cards available", "status": "Not Found"}), 404
+        
+        # Create a formatted text file
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        filename = f"approved_cards_{timestamp}.txt"
+        
+        # Create file content
+        file_content = f"AutoStripe API - Approved Cards Report\n"
+        file_content += f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        file_content += f"Total Approved Cards: {len(approved_cards_storage)}\n"
+        file_content += "=" * 60 + "\n\n"
+        
+        for i, card in enumerate(approved_cards_storage, 1):
+            file_content += f"[{i}] Card: {card['card']}\n"
+            file_content += f"    Domain: {card['domain']}\n"
+            file_content += f"    Status: {card['status']}\n"
+            file_content += f"    Response: {card['response']}\n"
+            file_content += f"    Time: {card['timestamp']}\n"
+            file_content += "-" * 40 + "\n"
+        
+        # Create a StringIO object to simulate a file
+        file_obj = StringIO(file_content)
+        
+        # Send file as download
+        return send_file(
+            file_obj,
+            as_attachment=True,
+            download_name=filename,
+            mimetype='text/plain'
+        )
+    except Exception as e:
+        logger.error(f"Download error: {e}")
+        return jsonify({"error": f"Internal server error: {str(e)}", "status": "Error"}), 500
 
 @app.route('/health')
 def health_check():
     return jsonify({"status": "healthy"}), 200
-
 
 @app.errorhandler(404)
 def not_found(error):
@@ -1335,5 +1521,3 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
     
     app.run(host='0.0.0.0', port=port, debug=False)
-    
-    #Join : t.me/GatewayMaker
