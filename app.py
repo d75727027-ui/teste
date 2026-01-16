@@ -914,8 +914,8 @@ def home():
                     return;
                 }
                 
-                if (massCards.length > 200) {
-                    showNotification('Maximum 200 cards allowed', 'error');
+                if (massCards.length > 1100) {
+                    showNotification('Maximum 1100 cards allowed', 'error');
                     return;
                 }
                 
