@@ -562,7 +562,7 @@ def home():
             <header>
                 <div class="logo">AutoStripe API</div>
                 <div class="tagline">Advanced Stripe Payment Processing</div>
-                <div class="designer">DEVELOPER: @dark | Telegram Bio Channel</div>
+                <div class="designer">DEVELOPER: @dark</div>
                 <div><span class="status-indicator status-online"></span>API Status: Online</div>
             </header>
             
