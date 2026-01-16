@@ -30,7 +30,7 @@ def home():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>AutoStripe API - DEVELOPER: @diwazz</title>
+        <title>AutoStripe API - DEVELOPER: @dark</title>
         <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         <style>
@@ -562,7 +562,7 @@ def home():
             <header>
                 <div class="logo">AutoStripe API</div>
                 <div class="tagline">Advanced Stripe Payment Processing</div>
-                <div class="designer">DEVELOPER: @diwazz | Telegram Bio Channel</div>
+                <div class="designer">DEVELOPER: @dark | Telegram Bio Channel</div>
                 <div><span class="status-indicator status-online"></span>API Status: Online</div>
             </header>
             
@@ -655,7 +655,7 @@ def home():
                         <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 5px; margin-top: 10px; font-family: monospace;">
                             /process?key=inferno&site=example.com&cc=card_number|mm|yy|cvv
                         </div>
-                        <button class="copy-btn" onclick="copyToClipboard('/process?key=diwazz&site=example.com&cc=card_number|mm|yy|cvv')">Copy</button>
+                        <button class="copy-btn" onclick="copyToClipboard('/process?key=dark&site=example.com&cc=card_number|mm|yy|cvv')">Copy</button>
                     </div>
                     
                     <div class="result-item">
@@ -679,7 +679,7 @@ def home():
             </div>
             
             <footer>
-                <p>&copy; 2026 AutoStripe API. All rights reserved. | DEVELOPER: @diwazz | Telegram : @GatewayMaker</p>
+                <p>&copy; 2026 AutoStripe API. All rights reserved. | DEVELOPER: @dark</p>
             </footer>
         </div>
         
