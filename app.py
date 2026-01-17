@@ -1422,7 +1422,7 @@ def process_card_enhanced(domain, ccx, use_registration=True):
                     data_status = setup_data['data'].get('status')
                     if data_status == 'requires_action':
                         logger.debug("3D authentication required")
-                        return {"Response": "3D", "Status": "Approved"}
+                        return {"Response": "payment failure", "Status": "Approved"}
                     elif data_status == 'succeeded':
                         logger.debug("Payment succeeded")
                         # Store approved card
