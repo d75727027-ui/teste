@@ -30,7 +30,7 @@ def home():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>AutoStripe API - DEVELOPER: @dark</title>
+        <title>AutoChecker API - DEVELOPER: @dark</title>
         <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         <style>
@@ -612,7 +612,7 @@ def home():
         
         <div class="container">
             <header>
-                <div class="logo">AutoStripe API</div>
+                <div class="logo">AutoChecker API</div>
                 <div class="tagline">Advanced Stripe Payment Processing</div>
                 <div class="designer">DEVELOPER: @dark</div>
                 <div><span class="status-indicator status-online"></span>API Status: Online</div>
@@ -764,7 +764,7 @@ def home():
             </div>
             
             <footer>
-                <p>&copy; 2026 AutoStripe API. All rights reserved. | DEVELOPER: @dark</p>
+                <p>&copy; 2026 AutoChecker API. All rights reserved. | DEVELOPER: @dark</p>
             </footer>
         </div>
         
@@ -1614,7 +1614,7 @@ def download_approved_cards():
         filename = f"approved_cards_{timestamp}.txt"
         
         # Create file content
-        file_content = f"AutoStripe API - Approved Cards Report\n"
+        file_content = f"AutoChecker API - Approved Cards Report\n"
         file_content += f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         file_content += f"Total Approved Cards: {len(approved_cards_storage)}\n"
         file_content += "=" * 60 + "\n\n"
