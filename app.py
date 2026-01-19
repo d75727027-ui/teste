@@ -23,6 +23,27 @@ processing_queue = []
 processing_lock = False
 current_processing_index = 0
 
+# Helper functions to prevent duplicate cards
+def add_approved_card(card_data):
+    """Add approved card to storage if it doesn't already exist"""
+    for existing_card in approved_cards_storage:
+        if existing_card['card'] == card_data['card'] and existing_card['domain'] == card_data['domain']:
+            logger.debug(f"Card already exists in approved storage: {card_data['card']}")
+            return False
+    approved_cards_storage.append(card_data)
+    logger.debug(f"Added approved card: {card_data['card']}")
+    return True
+
+def add_payment_failure_card(card_data):
+    """Add payment failure card to storage if it doesn't already exist"""
+    for existing_card in payment_failure_cards_storage:
+        if existing_card['card'] == card_data['card'] and existing_card['domain'] == card_data['domain']:
+            logger.debug(f"Card already exists in payment failure storage: {card_data['card']}")
+            return False
+    payment_failure_cards_storage.append(card_data)
+    logger.debug(f"Added payment failure card: {card_data['card']}")
+    return True
+
 @app.route('/')
 def home():
     return render_template_string("""
@@ -1453,7 +1474,7 @@ def process_card_enhanced(domain, ccx, use_registration=True):
                             'response': 'payment failure',
                             'status': 'Approved'
                         }
-                        payment_failure_cards_storage.append(failure_card)
+                        add_payment_failure_card(failure_card)
                         return {"Response": "payment failure", "Status": "Approved"}
                     elif data_status == 'succeeded':
                         logger.debug("Payment succeeded")
@@ -1465,7 +1486,7 @@ def process_card_enhanced(domain, ccx, use_registration=True):
                             'response': 'Card Added',
                             'status': 'Approved'
                         }
-                        approved_cards_storage.append(approved_card)
+                        add_approved_card(approved_card)
                         return {"Response": "Card Added ", "Status": "Approved"}
                     elif 'error' in setup_data['data']:
                         error_msg = setup_data['data']['error'].get('message', 'Unknown error')
@@ -1487,7 +1508,7 @@ def process_card_enhanced(domain, ccx, use_registration=True):
                         'response': 'Card Added',
                         'status': 'Approved'
                     }
-                    approved_cards_storage.append(approved_card)
+                    add_approved_card(approved_card)
                     return {"Response": "Card Added", "Status": "Approved"}
 
             except Exception as e:
