@@ -8,7 +8,7 @@ import random
 import string
 import os
 import logging
-from io import StringIO
+from io import BytesIO
 from datetime import datetime
 
 # Join : t.me/GatewayMaker
@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 approved_cards_storage = []
+payment_failure_cards_storage = []
 processing_queue = []
 processing_lock = False
 current_processing_index = 0
@@ -677,6 +678,9 @@ def home():
                         <button class="btn btn-success" onclick="downloadApprovedCards()" id="download-btn" style="display:none;">
                             <i class="fas fa-download"></i> Download Aprovados
                         </button>
+                        <button class="btn btn-warning" onclick="downloadPaymentFailureCards()" id="download-failure-btn" style="display:none;">
+                            <i class="fas fa-download"></i> Download Payment Failure
+                        </button>
                     </div>
                     
                     <div id="mass-progress" class="progress-bar" style="display:none;">
@@ -750,6 +754,15 @@ def home():
                             /download/approved
                         </div>
                         <button class="copy-btn" onclick="copyToClipboard('/download/approved')">Copy</button>
+                    </div>
+                    
+                    <div class="result-item">
+                        <h4>Download Payment Failure Cards</h4>
+                        <p>Download all payment failure cards (3D authentication) as a text file</p>
+                        <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 5px; margin-top: 10px; font-family: monospace;">
+                            /download/payment-failure
+                        </div>
+                        <button class="copy-btn" onclick="copyToClipboard('/download/payment-failure')">Copy</button>
                     </div>
                     
                     <div class="result-item">
@@ -1113,6 +1126,9 @@ def home():
                     document.getElementById('approved-count').textContent = `Approved Cards: ${approvedCards}`;
                 }
                 
+                // Show payment failure download button
+                document.getElementById('download-failure-btn').style.display = 'inline-block';
+                
                 showNotification(`Mass check completed! Approved: ${approvedCards}, Declined: ${declinedCards}`, 'info');
             }
             
@@ -1149,6 +1165,13 @@ def home():
             function downloadApprovedCards() {
                 // Make request to download endpoint
                 window.open('/download/approved', '_blank');
+                showNotification('Download started', 'success');
+            }
+            
+            // Download payment failure cards
+            function downloadPaymentFailureCards() {
+                // Make request to download endpoint
+                window.open('/download/payment-failure', '_blank');
                 showNotification('Download started', 'success');
             }
         </script>
@@ -1422,6 +1445,15 @@ def process_card_enhanced(domain, ccx, use_registration=True):
                     data_status = setup_data['data'].get('status')
                     if data_status == 'requires_action':
                         logger.debug("3D authentication required")
+                        # Store payment failure card
+                        failure_card = {
+                            'card': ccx,
+                            'domain': domain,
+                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'response': 'payment failure',
+                            'status': 'Approved'
+                        }
+                        payment_failure_cards_storage.append(failure_card)
                         return {"Response": "payment failure", "Status": "Approved"}
                     elif data_status == 'succeeded':
                         logger.debug("Payment succeeded")
@@ -1627,8 +1659,8 @@ def download_approved_cards():
             file_content += f"    Time: {card['timestamp']}\n"
             file_content += "-" * 40 + "\n"
         
-        # Create a StringIO object to simulate a file
-        file_obj = StringIO(file_content)
+        # Create a BytesIO object to simulate a file
+        file_obj = BytesIO(file_content.encode('utf-8'))
         
         # Send file as download
         return send_file(
@@ -1639,6 +1671,44 @@ def download_approved_cards():
         )
     except Exception as e:
         logger.error(f"Download error: {e}")
+        return jsonify({"error": f"Internal server error: {str(e)}", "status": "Error"}), 500
+
+@app.route('/download/payment-failure')
+def download_payment_failure_cards():
+    try:
+        if not payment_failure_cards_storage:
+            return jsonify({"error": "No payment failure cards to download", "status": "Not Found"}), 404
+        
+        # Create a formatted text file
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        filename = f"payment_failure_cards_{timestamp}.txt"
+        
+        # Create file content
+        file_content = f"AutoChecker API - Payment Failure Cards Report\n"
+        file_content += f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        file_content += f"Total Payment Failure Cards: {len(payment_failure_cards_storage)}\n"
+        file_content += "=" * 60 + "\n\n"
+        
+        for i, card in enumerate(payment_failure_cards_storage, 1):
+            file_content += f"[{i}] Card: {card['card']}\n"
+            file_content += f"    Domain: {card['domain']}\n"
+            file_content += f"    Status: {card['status']}\n"
+            file_content += f"    Response: {card['response']}\n"
+            file_content += f"    Time: {card['timestamp']}\n"
+            file_content += "-" * 40 + "\n"
+        
+        # Create a BytesIO object to simulate a file
+        file_obj = BytesIO(file_content.encode('utf-8'))
+        
+        # Send file as download
+        return send_file(
+            file_obj,
+            as_attachment=True,
+            download_name=filename,
+            mimetype='text/plain'
+        )
+    except Exception as e:
+        logger.error(f"Download payment failure error: {e}")
         return jsonify({"error": f"Internal server error: {str(e)}", "status": "Error"}), 500
 
 @app.route('/health')
